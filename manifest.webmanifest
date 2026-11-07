@@ -1,0 +1,16 @@
+{
+  "name": "Posta per aree",
+  "short_name": "Posta",
+  "description": "Posta per aree – Medical Renal Care",
+  "lang": "it",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0F5257",
+  "theme_color": "#0F5257",
+  "icons": [
+    { "src": "icona-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icona-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icona-maschera-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

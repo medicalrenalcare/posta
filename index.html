@@ -5,6 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>Posta per aree</title>
+<meta name="theme-color" content="#0F5257">
+<meta name="apple-mobile-web-app-title" content="Posta">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icona-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<script src="config.js"></script>
 <style>
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; background: #f4f6f6; color: #1d2b2c; }
   .attesa { min-height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 24px; box-sizing: border-box; text-align: center; }
@@ -22,18 +31,19 @@
  * POSTA PER AREE – pagina pubblicata su GitHub Pages (8.17).
  * Contiene solo l'indirizzo del servizio: l'app (schermate e codice) arriva ogni volta da Apps Script, quindi gli
  * aggiornamenti si fanno solo su Google. Nessun dato in questa pagina. Le richieste partono senza account Google.
- * Se cambia l'indirizzo /exec (nuovo deployment), si cambia solo la riga qui sotto.
+ * L'indirizzo del servizio sta in config.js (unica riga da cambiare dopo un nuovo deployment).
+ * Icona e nome per "Aggiungi a schermata Home": favicon-32.png, icona-192.png, icona-512.png, apple-touch-icon.png,
+ * icona-maschera-512.png, manifest.webmanifest (8.17.1).
  */
-var POSTA_EXEC = 'https://script.google.com/macros/s/AKfycbz98kY6Ci_mWotkPqqCEF8u0T2xyN3Cp-xCR5Z025YIjnevh33J-9GjgbftdiO-e_E_-g/exec';
 
 (function () {
-  var exec = String(POSTA_EXEC || '').trim()
+  var exec = String(window.POSTA_EXEC || '').trim()
     .replace(/\/a\/macros\/[^\/]+\/s\//, '/macros/s/').replace(/\/a\/[^\/]+\/macros\/s\//, '/macros/s/');
   function errore(msg) {
     document.getElementById('attesa').innerHTML = '<div class="errore"><p><strong>L\'app non si è aperta.</strong></p><p>' + msg +
       '</p><p><button type="button" onclick="location.reload()">Riprova</button></p></div>';
   }
-  if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(exec)) { errore('Indirizzo del servizio non impostato nella pagina.'); return; }
+  if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(exec)) { errore('Indirizzo del servizio non impostato: manca la riga POSTA_EXEC in config.js.'); return; }
   // pagina del fornitore (ticket): resta su Google
   if (/[?&]t=/.test(location.search)) { location.replace(exec + location.search); return; }
   var lento = setTimeout(function () { document.getElementById('testo').textContent = 'Ancora un momento: il servizio si sta avviando…'; }, 6000);
@@ -47,6 +57,21 @@ var POSTA_EXEC = 'https://script.google.com/macros/s/AKfycbz98kY6Ci_mWotkPqqCEF8
       document.open();
       document.write(o.html);
       document.close();
+      // la pagina dell'app sostituisce l'intestazione: si rimettono icona, nome e colore per il telefono
+      try {
+        [['link', { rel: 'icon', type: 'image/png', sizes: '32x32', href: 'favicon-32.png' }],
+         ['link', { rel: 'icon', type: 'image/png', sizes: '192x192', href: 'icona-192.png' }],
+         ['link', { rel: 'apple-touch-icon', href: 'apple-touch-icon.png' }],
+         ['link', { rel: 'manifest', href: 'manifest.webmanifest' }],
+         ['meta', { name: 'theme-color', content: '#0F5257' }],
+         ['meta', { name: 'apple-mobile-web-app-title', content: 'Posta' }],
+         ['meta', { name: 'apple-mobile-web-app-capable', content: 'yes' }],
+         ['meta', { name: 'mobile-web-app-capable', content: 'yes' }]].forEach(function (x) {
+          var el = document.createElement(x[0]);
+          Object.keys(x[1]).forEach(function (k) { el.setAttribute(k, x[1][k]); });
+          document.head.appendChild(el);
+        });
+      } catch (e) { /* solo estetica */ }
     })
     .catch(function (e) {
       clearTimeout(lento);
