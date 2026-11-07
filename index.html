@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Posta per aree</title>
+<style>
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; background: #f4f6f6; color: #1d2b2c; }
+  .attesa { min-height: 100vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px; padding: 24px; box-sizing: border-box; text-align: center; }
+  .rotella { width: 34px; height: 34px; border: 3px solid #cfdcdc; border-top-color: #0F5257; border-radius: 50%; animation: giro 0.9s linear infinite; }
+  @keyframes giro { to { transform: rotate(360deg); } }
+  .errore { max-width: 460px; line-height: 1.45; }
+  .errore a, .errore button { color: #0F5257; font-weight: 600; }
+  button { font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid #0F5257; background: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+<div class="attesa" id="attesa"><div class="rotella" aria-hidden="true"></div><div id="testo">Caricamento di Posta per aree…</div></div>
+<script>
+/*
+ * POSTA PER AREE – pagina pubblicata su GitHub Pages (8.17).
+ * Contiene solo l'indirizzo del servizio: l'app (schermate e codice) arriva ogni volta da Apps Script, quindi gli
+ * aggiornamenti si fanno solo su Google. Nessun dato in questa pagina. Le richieste partono senza account Google.
+ * Se cambia l'indirizzo /exec (nuovo deployment), si cambia solo la riga qui sotto.
+ */
+var POSTA_EXEC = 'INCOLLA_QUI_INDIRIZZO_EXEC';
+
+(function () {
+  var exec = String(POSTA_EXEC || '').trim()
+    .replace(/\/a\/macros\/[^\/]+\/s\//, '/macros/s/').replace(/\/a\/[^\/]+\/macros\/s\//, '/macros/s/');
+  function errore(msg) {
+    document.getElementById('attesa').innerHTML = '<div class="errore"><p><strong>L\'app non si è aperta.</strong></p><p>' + msg +
+      '</p><p><button type="button" onclick="location.reload()">Riprova</button></p></div>';
+  }
+  if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(exec)) { errore('Indirizzo del servizio non impostato nella pagina.'); return; }
+  // pagina del fornitore (ticket): resta su Google
+  if (/[?&]t=/.test(location.search)) { location.replace(exec + location.search); return; }
+  var lento = setTimeout(function () { document.getElementById('testo').textContent = 'Ancora un momento: il servizio si sta avviando…'; }, 6000);
+  fetch(exec + '?pagina=json', { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'follow' })
+    .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
+    .then(function (t) {
+      var o;
+      try { o = JSON.parse(t); } catch (e) { throw new Error('risposta non leggibile (l\'app è pubblicata con "Chi ha accesso: Chiunque"?)'); }
+      if (!o.ok || !o.html) throw new Error(o.errore || 'pagina vuota');
+      clearTimeout(lento);
+      document.open();
+      document.write(o.html);
+      document.close();
+    })
+    .catch(function (e) {
+      clearTimeout(lento);
+      errore('Controlla la connessione e riprova. Se il problema resta, avvisa l\'amministratore.<br><small>(' +
+        String(e && e.message || e).replace(/[<>&]/g, '') + ')</small>');
+    });
+})();
+</script>
+</body>
+</html>
