@@ -34,6 +34,8 @@
  * L'indirizzo del servizio sta in config.js (unica riga da cambiare dopo un nuovo deployment).
  * Icona e nome per "Aggiungi a schermata Home": favicon-32.png, icona-192.png, icona-512.png, apple-touch-icon.png,
  * icona-maschera-512.png, manifest.webmanifest (8.17.1).
+ * 8.25: notifiche come un'app vera (numero sull'icona, avvisi anche ad app chiusa): notifiche.js (caricato dopo la pagina
+ * dell'app) e sw.js (resta installato nel dispositivo e riceve le notifiche).
  */
 
 (function () {
@@ -46,6 +48,8 @@
   if (!/^https:\/\/script\.google\.com\/.*\/exec$/.test(exec)) { errore('Indirizzo del servizio non impostato: manca la riga POSTA_EXEC in config.js.'); return; }
   // pagina del fornitore (ticket): resta su Google
   if (/[?&]t=/.test(location.search)) { location.replace(exec + location.search); return; }
+  // 8.25: il pezzetto che riceve le notifiche si installa subito (anche prima dell'accesso)
+  try { if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () { /* senza notifiche */ }); } catch (e) { /* senza notifiche */ }
   var lento = setTimeout(function () { document.getElementById('testo').textContent = 'Ancora un momento: il servizio si sta avviando…'; }, 6000);
   fetch(exec + '?pagina=json', { method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'follow' })
     .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); })
@@ -72,6 +76,13 @@
           document.head.appendChild(el);
         });
       } catch (e) { /* solo estetica */ }
+      // 8.25: notifiche e numero sull'icona (la versione dopo il ? fa scaricare il file nuovo dopo un aggiornamento)
+      try {
+        window.POSTA_EXEC = window.POSTA_EXEC || exec;
+        var sc = document.createElement('script');
+        sc.src = 'notifiche.js?v=8.25.0';
+        document.head.appendChild(sc);
+      } catch (e) { /* senza notifiche */ }
     })
     .catch(function (e) {
       clearTimeout(lento);
