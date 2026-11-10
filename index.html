@@ -36,6 +36,7 @@
  * icona-maschera-512.png, manifest.webmanifest (8.17.1).
  * 8.25: notifiche come un'app vera (numero sull'icona, avvisi anche ad app chiusa): notifiche.js (caricato dopo la pagina
  * dell'app) e sw.js (resta installato nel dispositivo e riceve le notifiche).
+ * 8.26: notifiche.js?v=8.26.0 (il numero dopo il ? fa scaricare il file nuovo).
  */
 
 (function () {
@@ -80,7 +81,7 @@
       try {
         window.POSTA_EXEC = window.POSTA_EXEC || exec;
         var sc = document.createElement('script');
-        sc.src = 'notifiche.js?v=8.25.0';
+        sc.src = 'notifiche.js?v=8.26.0';
         document.head.appendChild(sc);
       } catch (e) { /* senza notifiche */ }
     })

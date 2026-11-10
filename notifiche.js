@@ -1,5 +1,5 @@
 /*
- * POSTA PER AREE – notifiche.js (8.25). Lo carica index.html dopo la pagina dell'app (App.html non cambia).
+ * POSTA PER AREE – notifiche.js (8.26). Lo carica index.html dopo la pagina dell'app.
  *  - Numero sull'icona dell'app installata (barra di Windows, Dock del Mac, iPhone) e nel titolo della finestra:
  *    sono le novità della campanella non ancora viste. Si aggiorna da solo con i controlli che l'app fa già ogni minuto.
  *  - Voce "Notifiche su questo dispositivo" nel menu con il nome: attiva o spegne le notifiche e manda una prova.
@@ -7,6 +7,12 @@
  *    14 giorni se si risponde "Non ora"). Su iPhone, finché l'app non è aggiunta alla schermata Home, spiega come fare.
  *  - Con le notifiche attive, gli avvisi arrivano anche ad app chiusa (sw.js). Senza, con l'app aperta ma ridotta a
  *    icona, l'avviso del sistema lo dà comunque questa pagina (se il permesso c'è).
+ * 8.26:
+ *  - "Spegni su questo dispositivo" resta spento: prima, al ricaricamento della pagina, il permesso già dato lo riaccendeva;
+ *  - con le notifiche bloccate nel browser compare la scheda con le istruzioni per sbloccarle (prima: niente);
+ *  - risponde a sw.js se la pagina può suonare (serve un clic dopo l'apertura: il browser lo vuole) e, se sì, fa controllare
+ *    subito le novità all'app (evento ppa:novita); se no, l'avviso lo dà il sistema, con il suo suono;
+ *  - nella finestra: gli ultimi avvisi mandati o saltati, con il motivo, e se il giro di ogni minuto è attivo.
  */
 (function () {
   'use strict';
@@ -20,7 +26,21 @@
   var ANDROID = /Android/i.test(UA);
   var STANDALONE = !!((window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true);
   var PUSH = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
-  var S = { reg: null, sub: null, dentro: false, server: null, numero: -1, ultimaVista: 0, iscrittoQui: false, chiesto: false };
+  var S = { reg: null, sub: null, dentro: false, server: null, numero: -1, ultimaVista: 0, iscrittoQui: false, chiesto: false, cliccato: false };
+
+  // 8.26: il browser lascia suonare la pagina solo dopo un clic o un tasto da quando è stata aperta
+  ['pointerdown', 'keydown'].forEach(function (t) { document.addEventListener(t, function () { S.cliccato = true; }, { capture: true, passive: true }); });
+  function puoSuonare() { return S.cliccato && !document.hidden && (!document.hasFocus || document.hasFocus()); }
+  // 8.26: domande e avvisi di sw.js
+  if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', function (ev) {
+    var d = ev.data || {};
+    if (d.ppa === 'puoiSuonare' && ev.ports && ev.ports[0]) {
+      var si = puoSuonare();
+      ev.ports[0].postMessage({ suona: si });
+      if (si) chiediNovitaAllApp();
+    } else if (d.ppa === 'novita') chiediNovitaAllApp();
+  });
+  function chiediNovitaAllApp() { try { window.dispatchEvent(new CustomEvent('ppa:novita')); } catch (e) { /* niente */ } }
 
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
@@ -77,7 +97,8 @@
     if (!S.ultimaVista) { S.ultimaVista = nov.ultima || 1; return; }
     var nuove = (nov.recenti || []).filter(function (v) { return v.t > S.ultimaVista; });
     S.ultimaVista = Math.max(S.ultimaVista, nov.ultima || 0);
-    if (!nuove.length || !document.hidden || S.iscrittoQui || !('Notification' in window) || Notification.permission !== 'granted') return;
+    // 8.26: anche con la pagina davanti, se non può suonare (nessun clic da quando è aperta)
+    if (!nuove.length || puoSuonare() || S.iscrittoQui || !('Notification' in window) || Notification.permission !== 'granted') return;
     var titolo = nuove.length === 1 ? nuove[0].titolo : nuove.length + ' novità in Posta per aree';
     var corpo = nuove.length === 1 ? 'Posta per aree' : nuove.slice(0, 4).map(function (v) { return v.titolo; }).join('\n');
     try {
@@ -138,6 +159,7 @@
     }).then(function (r) {
       S.iscrittoQui = true;
       locale('pa_notif_no', null);
+      locale('pa_notif_spente', null);   // 8.26: acceso a mano
       return r;
     });
   }
@@ -145,7 +167,7 @@
     return iscrizioneAttuale().then(function (s) {
       var ep = s ? s.endpoint : '';
       return (ep ? chiama('notificheDisiscrivi', [token(), { endpoint: ep }]) : Promise.resolve()).then(function () { return s ? s.unsubscribe() : true; });
-    }).then(function () { S.iscrittoQui = false; S.sub = null; });
+    }).then(function () { S.iscrittoQui = false; S.sub = null; locale('pa_notif_spente', String(Date.now())); });   // 8.26: resta spento
   }
   function prova() {
     return chiama('notificheProva', [token(), { endpoint: S.sub ? S.sub.endpoint : '' }]);
@@ -161,6 +183,8 @@
       if (typeof st.nuove === 'number') impostaNumero(st.nuove);
       S.iscrittoQui = !!(st.questo && st.questo.attivo);
       if (S.iscrittoQui || !PUSH) { if (!PUSH && IOS && !STANDALONE) proponi(); return; }
+      if (locale('pa_notif_spente')) return;   // 8.26: spente a mano su questo dispositivo: restano spente
+      if (Notification.permission === 'denied') { proponi(); return; }   // 8.26: bloccate: si spiega come sbloccarle
       if (Notification.permission === 'granted') {
         // permesso già dato (prima installazione, altro utente su questo dispositivo, indirizzo cambiato): si registra da solo
         attiva().catch(function () { proponi(); });
@@ -181,6 +205,7 @@
     '#ntf-velo{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;padding:12px}' +
     '#ntf-finestra{background:#fff;color:#1d2b2c;border-radius:12px;max-width:560px;width:100%;max-height:calc(100vh - 24px);overflow:auto;padding:18px 20px;box-shadow:0 10px 40px rgba(0,0,0,.25);font:14px/1.5 system-ui,-apple-system,"Segoe UI",Arial,sans-serif}' +
     '#ntf-finestra h2{font-size:18px;margin:0 0 8px}#ntf-finestra .ntf-stato{padding:8px 10px;border-radius:8px;background:#eef4f4;margin:8px 0}' +
+    '#ntf-finestra .ntf-registro{margin-top:8px}#ntf-finestra .ntf-registro ul{margin:6px 0;padding-left:18px;max-height:180px;overflow:auto}#ntf-finestra .ntf-registro li{margin:2px 0}' +
     '#ntf-finestra .ntf-ok{background:#e6f4ea}#ntf-finestra .ntf-no{background:#fdecea}#ntf-finestra ol{padding-left:20px;margin:6px 0}#ntf-finestra .ntf-aiuto{color:#5b6b6a;font-size:13px}' +
     'html[data-tema="scuro"] #ntf-scheda,html[data-tema="scuro"] #ntf-finestra{background:#1f2b2c;color:#e7eeee;border-color:#355}' +
     'html[data-tema="scuro"] #ntf-finestra .ntf-stato{background:#26393a}html[data-tema="scuro"] .ntf-btn{background:transparent;color:#9fd3d6;border-color:#9fd3d6}' +
@@ -200,6 +225,9 @@
       d.innerHTML = '<b>Vuoi le notifiche anche su iPhone?</b>Su iPhone arrivano solo se l\'app è sulla schermata Home: tocca <strong>Condividi</strong> (il quadrato con la freccia in su) → ' +
         '<strong>Aggiungi alla schermata Home</strong>, poi apri l\'app da lì e accetta le notifiche.' +
         '<div class="ntf-bottoni"><button type="button" class="ntf-btn" id="ntf-no">Ho capito</button></div>';
+    } else if (PUSH && Notification.permission === 'denied') {   // 8.26
+      d.innerHTML = '<b>Le notifiche sono bloccate su questo ' + (ANDROID || IOS ? 'telefono' : 'computer') + '</b>Il browser non lascia arrivare gli avvisi dell\'app. ' + esc(comeSbloccare()) +
+        ' Poi ricarica la pagina.<div class="ntf-bottoni"><button type="button" class="ntf-btn" id="ntf-no">Non ora</button><button type="button" class="ntf-btn ntf-pri" id="ntf-come">Come si fa</button></div>';
     } else {
       d.innerHTML = '<b>Vuoi le notifiche su questo ' + (ANDROID || IOS ? 'telefono' : 'computer') + '?</b>Quando arriva un\'email nelle tue aree, un messaggio o un promemoria, ' +
         'ti avvisa anche con l\'app chiusa e mette il numero sull\'icona. Si possono spegnere quando vuoi dal menu con il tuo nome.' +
@@ -207,6 +235,7 @@
     }
     document.body.appendChild(d);
     $('ntf-no').onclick = function () { locale('pa_notif_no', String(Date.now())); chiudiScheda(); };
+    if ($('ntf-come')) $('ntf-come').onclick = function () { chiudiScheda(); apriFinestra(''); aggiornaStato().then(function () { disegnaFinestra(); }); };
     if ($('ntf-si')) $('ntf-si').onclick = function () {
       var b = this; b.disabled = true; b.textContent = 'Attivazione…';
       attiva().then(function () { chiudiScheda(); avvisoBreve('Notifiche attive su questo dispositivo.'); })
@@ -265,6 +294,21 @@
         (IOS ? '' : '<p class="ntf-aiuto">Per un\'app vera e propria: ' + (ANDROID ? 'menu ⋮ di Chrome → <strong>Installa app</strong> (o Aggiungi a schermata Home).' : 'Chrome o Edge → icona <strong>Installa</strong> nella barra dell\'indirizzo (o menu → App → Installa questo sito come app).') + '</p>');
     }
     if (S.server && S.server.altri && S.server.altri.length) h += '<p class="ntf-aiuto">Attive anche su: ' + S.server.altri.map(function (x) { return esc(x.dispositivo); }).join(', ') + '.</p>';
+    // 8.26: gli ultimi avvisi (mandati, saltati con il motivo, errori) e il giro di ogni minuto
+    var sv = S.server || {};
+    if (sv.giro && (S.iscrittoQui || (sv.altri || []).length)) {
+      var vivo = sv.giro.ultimo ? Math.round((Date.now() - new Date(sv.giro.ultimo).getTime()) / 60000) : -1;
+      h += '<p class="ntf-aiuto">Controllo delle novità: ' + (vivo < 0 ? 'non ancora partito (parte entro un minuto)' : vivo <= 2 ? 'attivo, ultimo ' + (vivo < 1 ? 'adesso' : vivo + ' min fa') :
+        '<strong>fermo da ' + vivo + ' minuti</strong>: l\'app lo sta riavviando') + '.</p>';
+    }
+    if ((sv.registro || []).length) {
+      var nomi = { INVIATO: 'mandato', SALTATO: 'non mandato', ERRORE: 'errore', INFO: '' };
+      h += '<details class="ntf-registro"' + (sv.registro.some(function (x) { return x.tipo !== 'INVIATO' && x.tipo !== 'INFO'; }) ? ' open' : '') + '><summary>Ultimi avvisi</summary><ul>' +
+        sv.registro.map(function (x) {
+          return '<li><span class="ntf-aiuto">' + esc(new Date(x.t).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })) + '</span> ' +
+            (nomi[x.tipo] ? '<strong>' + esc(nomi[x.tipo]) + '</strong>: ' : '') + esc(x.testo) + '</li>';
+        }).join('') + '</ul></details>';
+    }
     corpo.innerHTML = h;
     var bottoni = [];
     if (stato === 'spente') bottoni.push('<button type="button" class="ntf-btn ntf-pri" id="ntf-attiva">Attiva le notifiche</button>');
