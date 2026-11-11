@@ -1,5 +1,5 @@
 /*
- * POSTA PER AREE – notifiche.js (8.26.2). Lo carica index.html dopo la pagina dell'app.
+ * POSTA PER AREE – notifiche.js (8.26.3). Lo carica index.html dopo la pagina dell'app.
  *  - Numero sull'icona dell'app installata (barra di Windows, Dock del Mac, iPhone) e nel titolo della finestra:
  *    sono le novità della campanella non ancora viste. Si aggiorna da solo con i controlli che l'app fa già ogni minuto.
  *  - Voce "Notifiche su questo dispositivo" nel menu con il nome: attiva o spegne le notifiche e manda una prova.
@@ -19,6 +19,10 @@
  *  - "Manda una prova" controlla da sola se la prova è arrivata (fino a 25 secondi) e lo dice;
  *  - "Rifai la registrazione": indirizzo push nuovo per questo dispositivo e poi una prova. Dopo l'accesso, se l'ultimo
  *    avviso non era arrivato, la registrazione si rifà da sola (al massimo una volta al giorno).
+ * 8.26.3 (il numero sull'icona restava fermo dopo aver visto le novità):
+ *  - il numero sull'icona si rimette a ogni controllo, anche se per la pagina non è cambiato: con l'app in secondo piano lo
+ *    scrive anche sw.js (all'arrivo dell'avviso) e la pagina, che non lo sapeva, non lo toglieva più;
+ *  - tornando sull'app (finestra di nuovo davanti) i numeri si controllano subito, senza aspettare il minuto.
  */
 (function () {
   'use strict';
@@ -69,10 +73,9 @@
   // ============================ NUMERO SULL'ICONA E NEL TITOLO ============================
   function impostaNumero(n) {
     n = Math.max(0, Number(n) || 0);
-    if (n !== S.numero) {
-      S.numero = n;
-      try { if (navigator.setAppBadge) { if (n) navigator.setAppBadge(n); else navigator.clearAppBadge(); } } catch (e) { /* non disponibile */ }
-    }
+    // 8.26.3: sempre (anche se per la pagina è lo stesso numero): sull'icona scrive anche sw.js, all'arrivo di un avviso
+    S.numero = n;
+    try { if (navigator.setAppBadge) { if (n) navigator.setAppBadge(n); else navigator.clearAppBadge(); } } catch (e) { /* non disponibile */ }
     // il titolo si rimette ogni volta (l'app lo riscrive all'accesso)
     var base = String(document.title || 'Posta per aree').replace(/^\(\d+\+?\)\s*/, '');
     document.title = n ? '(' + (n > 99 ? '99+' : n) + ') ' + base : base;
@@ -114,6 +117,8 @@
   }
   // tornando nell'app, gli avvisi già mostrati non servono più
   document.addEventListener('visibilitychange', function () {
+    // 8.26.3: tornando sull'app i numeri (campanella, icona) si controllano subito, al massimo una volta ogni 20 secondi
+    if (!document.hidden && S.dentro && Date.now() - (S.ultimoRitorno || 0) > 20000) { S.ultimoRitorno = Date.now(); chiediNovitaAllApp(); }
     if (document.hidden || !S.reg || !S.reg.getNotifications) return;
     S.reg.getNotifications({ tag: 'posta-per-aree' }).then(function (l) { l.forEach(function (n) { n.close(); }); }).catch(function () { /* niente */ });
   });
