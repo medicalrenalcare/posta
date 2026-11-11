@@ -1,5 +1,5 @@
 /*
- * POSTA PER AREE – notifiche.js (8.26). Lo carica index.html dopo la pagina dell'app.
+ * POSTA PER AREE – notifiche.js (8.26.2). Lo carica index.html dopo la pagina dell'app.
  *  - Numero sull'icona dell'app installata (barra di Windows, Dock del Mac, iPhone) e nel titolo della finestra:
  *    sono le novità della campanella non ancora viste. Si aggiorna da solo con i controlli che l'app fa già ogni minuto.
  *  - Voce "Notifiche su questo dispositivo" nel menu con il nome: attiva o spegne le notifiche e manda una prova.
@@ -13,6 +13,12 @@
  *  - risponde a sw.js se la pagina può suonare (serve un clic dopo l'apertura: il browser lo vuole) e, se sì, fa controllare
  *    subito le novità all'app (evento ppa:novita); se no, l'avviso lo dà il sistema, con il suo suono;
  *  - nella finestra: gli ultimi avvisi mandati o saltati, con il motivo, e se il giro di ogni minuto è attivo.
+ * 8.26.2 (su Android l'avviso risultava mandato ma non arrivava):
+ *  - sw.js tiene sul dispositivo un diario degli avvisi ricevuti; la finestra lo mostra ("Ricevuti da questo dispositivo")
+ *    e dice se l'ultimo avviso mandato dall'app è arrivato qui oppure no, con cosa controllare sul dispositivo;
+ *  - "Manda una prova" controlla da sola se la prova è arrivata (fino a 25 secondi) e lo dice;
+ *  - "Rifai la registrazione": indirizzo push nuovo per questo dispositivo e poi una prova. Dopo l'accesso, se l'ultimo
+ *    avviso non era arrivato, la registrazione si rifà da sola (al massimo una volta al giorno).
  */
 (function () {
   'use strict';
@@ -173,6 +179,96 @@
     return chiama('notificheProva', [token(), { endpoint: S.sub ? S.sub.endpoint : '' }]);
   }
 
+  // ============================ 8.26.2: L'AVVISO È ARRIVATO SU QUESTO DISPOSITIVO? ============================
+  // sw.js annota sul dispositivo ogni avviso che riceve (diario). Qui si confronta con quello che l'app ha mandato.
+
+  /** Versione di sw.js ('' se è ancora quello vecchio, senza diario, o se non risponde). */
+  function versioneSw() {
+    return registrazione().then(function (r) {
+      var sw = r && r.active;
+      if (!sw) return '';
+      return new Promise(function (ok) {
+        var fatto = false, fine = function (v) { if (!fatto) { fatto = true; ok(v); } };
+        try {
+          var c = new MessageChannel();
+          c.port1.onmessage = function (ev) { fine(String((ev.data && ev.data.v) || '')); };
+          sw.postMessage({ ppa: 'versione' }, [c.port2]);
+        } catch (e) { fine(''); return; }
+        setTimeout(function () { fine(''); }, 1500);
+      });
+    }).catch(function () { return ''; }).then(function (v) {
+      S.swNuovo = !!v;
+      if (v && !locale('pa_notif_diario')) locale('pa_notif_diario', String(Date.now()));   // da quando il diario c'è
+      if (!v && S.reg && S.reg.update) { try { S.reg.update(); } catch (e) { /* al prossimo avvio */ } }
+      return v;
+    });
+  }
+  /** Avvisi ricevuti da questo dispositivo, dal più recente: [{ t, server, esito, prova }] (null = non si può leggere). */
+  function diarioLocale() {
+    if (!('caches' in window)) return Promise.resolve(null);
+    var base = (S.reg && S.reg.scope) || new URL('./', location.href).href;
+    return caches.open('ppa-diagnosi').then(function (c) { return c.match(base + 'diario-push'); })
+      .then(function (r) { return r ? r.json() : []; }).then(function (l) { return Array.isArray(l) ? l : []; }).catch(function () { return null; });
+  }
+  /** L'ultimo avviso mandato a questo dispositivo è arrivato? 'si', 'no' oppure '' (non si può dire). */
+  function esitoUltimoAvviso(diario) {
+    var q = S.server && S.server.questo, da = Number(locale('pa_notif_diario') || 0);
+    if (!S.swNuovo || !q || !q.ultimo || !diario || !da || !/^consegnato/.test(q.esito || '')) return '';
+    var t = new Date(q.ultimo).getTime();
+    if (!(t > da + 60000) || Date.now() - t < 120000) return '';   // mandato prima del diario, o troppo fresco per dirlo
+    return diario.some(function (x) { return x.t > t - 120000; }) ? 'si' : 'no';
+  }
+  /** Rifà da capo la registrazione di questo dispositivo (indirizzo push nuovo). */
+  function rifaiIscrizione() {
+    return iscrizioneAttuale().then(function (s) {
+      if (!s) return attiva();
+      return chiama('notificheDisiscrivi', [token(), { endpoint: s.endpoint }]).catch(function () { return null; })
+        .then(function () { return s.unsubscribe(); }).then(function () { S.sub = null; S.iscrittoQui = false; return attiva(); });
+    });
+  }
+  /** Manda una prova e controlla nel diario se questo dispositivo l'ha ricevuta (aspetta fino a 25 secondi). */
+  function provaVerificata() {
+    var t0 = Date.now();
+    return prova().then(function (r) {
+      if (!r.inviati) return { ok: false, testo: 'Prova non consegnata: ' + (r.esiti || []).join('; ') };
+      if (!S.swNuovo) return { ok: true, testo: 'Prova inviata: tra pochi secondi deve comparire l\'avviso "Prova delle notifiche".' };
+      return new Promise(function (fine) {
+        var giri = 0;
+        var guarda = function () {
+          diarioLocale().then(function (d) {
+            var v = (d || []).filter(function (x) { return x.t >= t0 - 500; })[0];   // stesso orologio: solo le bussate dopo il clic
+            if (v && v.esito !== 'in corso') {
+              fine(/^avviso mostrato/.test(v.esito) ? { ok: true, testo: 'Prova ricevuta da questo dispositivo: l\'avviso "Prova delle notifiche" è stato mostrato. Se non l\'hai visto né sentito, sono le impostazioni di notifica del dispositivo: ' + comeSbloccare() }
+                : { ok: false, testo: 'Prova ricevuta da questo dispositivo, ma ' + v.esito + (v.server && v.server !== 'ok' ? ' (risposta dell\'app: ' + v.server + ')' : '') + '.' });
+            } else if (++giri >= 12) {
+              fine({ ok: false, testo: 'La prova è partita (Google l\'ha accettata) ma dopo 25 secondi questo dispositivo non l\'ha ricevuta. ' + comeSvegliare() });
+            } else setTimeout(guarda, 2000);
+          });
+        };
+        setTimeout(guarda, 2000);
+      });
+    });
+  }
+  /** Dopo l'accesso: se l'ultimo avviso non è arrivato qui, la registrazione si rifà da sola (al massimo una volta al giorno). */
+  function controllaArrivo() {
+    return versioneSw().then(function (v) { return v ? diarioLocale() : null; }).then(function (d) {
+      S.diario = d;
+      if (esitoUltimoAvviso(d) !== 'no') return null;
+      if (Date.now() - Number(locale('pa_notif_rifatta') || 0) < 20 * 3600000) return null;
+      locale('pa_notif_rifatta', String(Date.now()));
+      return rifaiIscrizione().then(function () {
+        avvisoBreve('L\'ultimo avviso non era arrivato su questo dispositivo: la registrazione delle notifiche è stata rifatta. Per controllare: menu con il tuo nome → Notifiche su questo dispositivo → Manda una prova.', 12000);
+      });
+    }).catch(function () { /* si riprova al prossimo accesso */ });
+  }
+  function comeSvegliare() {
+    if (IOS) return 'Su iPhone: controlla che non sia attiva una "Full immersion" (Non disturbare) e apri l\'app dalla schermata Home.';
+    if (ANDROID) return 'Sul telefono: 1) Impostazioni → App → Chrome → Batteria → "Senza restrizioni" (o "Non ottimizzare"); se tra le app c\'è anche "Posta per aree", lo stesso. ' +
+      '2) Spegni "Risparmio energetico" e "Risparmio dati". 3) Su Xiaomi, Oppo, Realme, Huawei, Honor: attiva "Avvio automatico" per Chrome. 4) Non chiudere Chrome con "Chiudi tutto". Poi premi "Rifai la registrazione".';
+    return 'Sul computer il browser deve poter restare attivo in sottofondo. Edge: Impostazioni → Sistema e prestazioni → "Continua a eseguire le estensioni e le app in background quando Microsoft Edge è chiuso" acceso. ' +
+      'Chrome: Impostazioni → Sistema → "Continua a eseguire le app in background dopo la chiusura di Google Chrome" acceso.';
+  }
+
   /** Dopo l'accesso: lo stato dal server; se il permesso c'è già si (ri)registra il dispositivo senza chiedere niente. */
   function dopoAccesso() {
     aggiungiVoceMenu();
@@ -182,6 +278,7 @@
       if (!st || !st.attive) return;
       if (typeof st.nuove === 'number') impostaNumero(st.nuove);
       S.iscrittoQui = !!(st.questo && st.questo.attivo);
+      if (S.iscrittoQui && PUSH) controllaArrivo();   // 8.26.2: l'ultimo avviso è arrivato qui? Se no, la registrazione si rifà
       if (S.iscrittoQui || !PUSH) { if (!PUSH && IOS && !STANDALONE) proponi(); return; }
       if (locale('pa_notif_spente')) return;   // 8.26: spente a mano su questo dispositivo: restano spente
       if (Notification.permission === 'denied') { proponi(); return; }   // 8.26: bloccate: si spiega come sbloccarle
@@ -242,11 +339,11 @@
         .catch(function (e) { chiudiScheda(); apriFinestra(String(e && e.message || e)); });
     };
   }
-  function avvisoBreve(t) {
+  function avvisoBreve(t, ms) {
     var d = document.createElement('div');
     d.id = 'ntf-scheda'; d.innerHTML = esc(t);
     chiudiScheda(); document.body.appendChild(d);
-    setTimeout(function () { if ($('ntf-scheda') === d) chiudiScheda(); }, 5000);
+    setTimeout(function () { if ($('ntf-scheda') === d) chiudiScheda(); }, ms || 5000);
   }
 
   function comeSbloccare() {
@@ -287,8 +384,16 @@
       h += '<div class="ntf-stato ntf-ok"><strong>Attive.</strong> Ti arriva un avviso per ogni novità della campanella (email delle tue aree, assegnazioni, messaggi, promemoria, ticket), ' +
         'anche con l\'app chiusa, e il numero compare sull\'icona.</div>' +
         (q ? '<p class="ntf-aiuto">Dispositivo: ' + esc(q.dispositivo) + (q.ultimo ? ' · ultimo avviso ' + esc(new Date(q.ultimo).toLocaleString('it-IT')) + ' (' + esc(q.esito) + ')' : '') + '</p>' : '') +
-        '<p class="ntf-aiuto">Nell\'avviso ci sono solo chi scrive e l\'area, mai l\'oggetto o il testo. Le email arrivano nell\'app con lo smistamento (ogni 5 minuti), messaggi e assegnazioni entro un minuto. ' +
+        '<p class="ntf-aiuto">Nell\'avviso ci sono solo chi scrive e l\'area, mai l\'oggetto o il testo. Le email arrivano subito dopo lo smistamento (di solito entro un minuto), messaggi e assegnazioni entro un minuto. ' +
         'Se la prova non arriva: ' + esc(comeSbloccare()) + '</p>';
+      // 8.26.2: l'ultimo avviso è arrivato su questo dispositivo? (diario scritto da sw.js)
+      var arr = esitoUltimoAvviso(S.diario), ora = function (t) { return new Date(t).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); };
+      if (arr === 'no') h += '<div class="ntf-stato ntf-no"><strong>L\'ultimo avviso (' + esc(ora(q.ultimo)) + ') è partito ma questo dispositivo non l\'ha ricevuto.</strong> Google l\'ha accettato, ma il dispositivo non ha svegliato l\'app. ' + esc(comeSvegliare()) + '</div>';
+      if (S.swNuovo && S.diario) {
+        h += '<details class="ntf-registro"' + (arr === 'no' ? ' open' : '') + '><summary>Ricevuti da questo dispositivo</summary>' + (S.diario.length ? '<ul>' + S.diario.slice(0, 8).map(function (x) {
+          return '<li><span class="ntf-aiuto">' + esc(ora(x.t)) + '</span> ' + (x.prova ? 'prova: ' : '') + esc(x.esito || '') + (x.server && x.server !== 'ok' ? ' <span class="ntf-aiuto">(risposta dell\'app: ' + esc(x.server) + ')</span>' : '') + '</li>';
+        }).join('') + '</ul>' : '<p class="ntf-aiuto">Ancora nessuno (il diario parte dalla versione 8.26.2).</p>') + '</details>';
+      }
     } else {
       h += '<div class="ntf-stato">Spente su questo dispositivo.</div><p>Con le notifiche attive ti arriva un avviso per ogni novità (email delle tue aree, assegnazioni, messaggi, promemoria, ticket), anche con l\'app chiusa, e il numero sull\'icona.</p>' +
         (IOS ? '' : '<p class="ntf-aiuto">Per un\'app vera e propria: ' + (ANDROID ? 'menu ⋮ di Chrome → <strong>Installa app</strong> (o Aggiungi a schermata Home).' : 'Chrome o Edge → icona <strong>Installa</strong> nella barra dell\'indirizzo (o menu → App → Installa questo sito come app).') + '</p>');
@@ -312,23 +417,21 @@
     corpo.innerHTML = h;
     var bottoni = [];
     if (stato === 'spente') bottoni.push('<button type="button" class="ntf-btn ntf-pri" id="ntf-attiva">Attiva le notifiche</button>');
-    if (stato === 'attive') bottoni.push('<button type="button" class="ntf-btn" id="ntf-spegni">Spegni su questo dispositivo</button>', '<button type="button" class="ntf-btn ntf-pri" id="ntf-prova">Manda una prova</button>');
+    if (stato === 'attive') bottoni.push('<button type="button" class="ntf-btn" id="ntf-spegni">Spegni su questo dispositivo</button>', '<button type="button" class="ntf-btn" id="ntf-rifai" title="Indirizzo push nuovo per questo dispositivo, poi una prova">Rifai la registrazione</button>', '<button type="button" class="ntf-btn ntf-pri" id="ntf-prova">Manda una prova</button>');
     bottoni.push('<button type="button" class="ntf-btn" id="ntf-chiudi">Chiudi</button>');
     az.innerHTML = bottoni.join('');
     $('ntf-chiudi').onclick = chiudiFinestra;
     var lavora = function (b, testo, fn) {
       b.disabled = true; b.textContent = testo;
-      fn().then(function (m) { aggiornaStato().then(function () { disegnaFinestra(); if (m) avvisoInFinestra(m, true); }); })
+      fn().then(function (m) { aggiornaStato().then(function () { disegnaFinestra(); if (m && typeof m === 'object') avvisoInFinestra(m.testo, m.ok); else if (m) avvisoInFinestra(m, true); }); })
         .catch(function (e) { aggiornaStato().then(function () { disegnaFinestra(String(e && e.message || e)); }); });
     };
     if ($('ntf-attiva')) $('ntf-attiva').onclick = function () { lavora(this, 'Attivazione…', function () { return attiva().then(function () { return 'Notifiche attive. Prova con "Manda una prova".'; }); }); };
     if ($('ntf-spegni')) $('ntf-spegni').onclick = function () { lavora(this, 'Spegnimento…', function () { return spegni().then(function () { return 'Notifiche spente su questo dispositivo.'; }); }); };
-    if ($('ntf-prova')) $('ntf-prova').onclick = function () {
-      lavora(this, 'Invio…', function () {
-        return prova().then(function (r) {
-          return r.inviati ? 'Prova inviata: tra pochi secondi deve comparire l\'avviso "Prova delle notifiche". Se non arriva, controlla le impostazioni qui sopra.' : 'Prova non consegnata: ' + (r.esiti || []).join('; ');
-        });
-      });
+    // 8.26.2: la prova controlla da sola se questo dispositivo l'ha ricevuta
+    if ($('ntf-prova')) $('ntf-prova').onclick = function () { lavora(this, 'Invio e controllo (fino a 25 secondi)…', provaVerificata); };
+    if ($('ntf-rifai')) $('ntf-rifai').onclick = function () {
+      lavora(this, 'Registrazione…', function () { locale('pa_notif_rifatta', String(Date.now())); return rifaiIscrizione().then(provaVerificata); });
     };
   }
   function avvisoInFinestra(t, ok) {
@@ -343,7 +446,9 @@
     if (PUSH) ep = iscrizioneAttuale().catch(function () { return null; });
     return ep.then(function (s) { return chiama('notificheStato', [token(), { endpoint: s ? s.endpoint : '' }]); })
       .then(function (st) { S.server = st; S.iscrittoQui = !!(st && st.questo && st.questo.attivo && S.sub); })
-      .catch(function () { /* resta lo stato di prima */ });
+      .catch(function () { /* resta lo stato di prima */ })
+      .then(function () { return PUSH ? versioneSw().then(function (v) { return v ? diarioLocale() : null; }).then(function (d) { S.diario = d; }) : null; })   // 8.26.2
+      .catch(function () { /* senza diario */ });
   }
 
   /** Voce nel menu con il nome dell'utente (prima di "Cambia password"). */
